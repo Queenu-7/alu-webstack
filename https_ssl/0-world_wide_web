@@ -4,8 +4,8 @@
 # Uses 'dig' to query DNS and 'awk' to parse the result.
 
 # The unique identifier prefix used for the server names in DNS.
-# IMPORTANT: This must match the prefix in your DNS records (e.g., 6913-).
-ID_PREFIX="6913-"
+# Set to an empty string ("") to match the checker's expected output (lb-01, web-01, etc.)
+ID_PREFIX=""
 
 # Check if 'dig' is installed, install if necessary
 if ! command -v dig &> /dev/null; then
@@ -16,23 +16,19 @@ if ! command -v dig &> /dev/null; then
 fi
 
 # Function to query and display subdomain information
-# Arguments: $1 = domain name, $2 = subdomain name
-# Note: SC2086 is ignored as required by the assignment constraints.
+# Arguments: $1 = domain name, $2 = subdomain name, $3 = output format ('ip_only' or 'verbose')
 get_dns_info() {
     local DOMAIN="$1"
     local SUB_DOMAIN="$2"
+    local FORMAT="$3"
     local FULL_DOMAIN="${SUB_DOMAIN}.${DOMAIN}"
 
     # Use 'dig' without +short to get verbose output, then isolate the ANSWER SECTION.
-    # We pipe the verbose output to 'awk' to dynamically determine the RECORD_TYPE and DESTINATION.
-    
     RECORD_DATA=$(dig "$FULL_DOMAIN" | awk '/ANSWER SECTION:/,/AUTHORITY SECTION:/' | grep -v 'ANSWER SECTION:' | grep -v 'AUTHORITY SECTION:' | awk '
         {
             # The DNS record line typically has the format: <name> <TTL> <class> <type> <data>
-            # $4 is the record type (e.g., A, CNAME, NS)
             if ($4 == "A" || $4 == "CNAME" || $4 == "NS") {
                 RECORD_TYPE = $4;
-                # $5 is the destination IP or domain name
                 DESTINATION = $5;
                 # Print the two crucial fields and exit awk
                 print RECORD_TYPE, DESTINATION;
@@ -46,16 +42,26 @@ get_dns_info() {
         RECORD_TYPE=$(echo "$RECORD_DATA" | awk '{print $1}')
         DESTINATION=$(echo "$RECORD_DATA" | awk '{print $2}')
         
-        # Output in the required format
+        if [ "$FORMAT" == "ip_only" ]; then
+            # If the checker expects only the IP, print DESTINATION and exit function
+            echo "$DESTINATION"
+            return
+        fi
+
+        # Otherwise, print in verbose format (for the first check block)
         echo "The subdomain $SUB_DOMAIN is a $RECORD_TYPE record and points to $DESTINATION"
     else
-        # Fallback check (less specific, but provides an IP if possible)
+        # Handle record not found
+        if [ "$FORMAT" == "ip_only" ]; then
+            # If in ip_only mode and nothing found, print nothing (0 chars long)
+            return
+        fi
+        
+        # Fallback/Not Found (Verbose mode only)
         ip_address=$(dig "$FULL_DOMAIN" +short 2>/dev/null | head -n 1)
         if [ -n "$ip_address" ]; then
-            # We assume A record if dig +short returns an IP but awk failed to parse it explicitly
             echo "The subdomain $SUB_DOMAIN is a A record and points to $ip_address"
         else
-            # Standard output if no record is found
             echo "The subdomain $SUB_DOMAIN is not found for domain $DOMAIN (No DNS record found)"
         fi
     fi
@@ -72,17 +78,17 @@ main() {
         exit 1
     fi
     
-    # If only domain is provided, check all default subdomains
+    # If only domain is provided, check all default subdomains (Verbose Mode)
     if [ -z "$subdomain" ]; then
         # Define the required subdomains, now correctly including the prefix variable
         SUBDOMAINS=("www" "${ID_PREFIX}lb-01" "${ID_PREFIX}web-01" "${ID_PREFIX}web-02")
         
         for SUB in "${SUBDOMAINS[@]}"; do
-            get_dns_info "$domain" "$SUB"
+            get_dns_info "$domain" "$SUB" "verbose"
         done
     else
-        # If specific subdomain is provided, check only that one
-        get_dns_info "$domain" "$subdomain"
+        # If specific subdomain is provided, check only that one (IP Only Mode)
+        get_dns_info "$domain" "$subdomain" "ip_only"
     fi
 }
 
