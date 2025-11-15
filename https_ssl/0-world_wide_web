@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # File: 0-world_wide_web
 # Audits DNS records (A records) for specified subdomains of a given domain name.
-# Uses 'dig' to query DNS and 'awk' to parse the result.
+# Uses 'dig' to query DNS and 'awk' to parse the result, ensuring verbose output 
+# for both one and two arguments.
 
 # The unique identifier prefix used for the server names in DNS.
-# Set to an empty string ("") to match the checker's expected output (lb-01, web-01, etc.)
 ID_PREFIX=""
 
 # Check if 'dig' is installed, install if necessary
@@ -15,26 +15,26 @@ if ! command -v dig &> /dev/null; then
     sudo apt-get install dnsutils -y > /dev/null
 fi
 
-# Function to query and display subdomain information
-# Arguments: $1 = domain name, $2 = subdomain name, $3 = output format ('ip_only' or 'verbose')
+# Function to query and display subdomain information (Always verbose)
+# Arguments: $1 = domain name, $2 = subdomain name
 get_dns_info() {
     local DOMAIN="$1"
     local SUB_DOMAIN="$2"
-    local FORMAT="$3"
     local FULL_DOMAIN="${SUB_DOMAIN}.${DOMAIN}"
 
-    # Use 'dig' without +short to get verbose output, then isolate the ANSWER SECTION.
+    # Use 'dig' to query and capture the full answer section data
+    # We look for A or CNAME records.
     RECORD_DATA=$(dig "$FULL_DOMAIN" | awk '/ANSWER SECTION:/,/AUTHORITY SECTION:/' | grep -v 'ANSWER SECTION:' | grep -v 'AUTHORITY SECTION:' | awk '
         {
             # The DNS record line typically has the format: <name> <TTL> <class> <type> <data>
-            if ($4 == "A" || $4 == "CNAME" || $4 == "NS") {
+            if ($4 == "A" || $4 == "CNAME") {
                 RECORD_TYPE = $4;
                 DESTINATION = $5;
                 # Print the two crucial fields and exit awk
                 print RECORD_TYPE, DESTINATION;
                 exit;
             }
-        }' | head -n 1) # Take only the first relevant line
+        }' | head -n 1)
 
     # Check if we successfully extracted data using awk
     if [ -n "$RECORD_DATA" ]; then
@@ -42,26 +42,17 @@ get_dns_info() {
         RECORD_TYPE=$(echo "$RECORD_DATA" | awk '{print $1}')
         DESTINATION=$(echo "$RECORD_DATA" | awk '{print $2}')
         
-        if [ "$FORMAT" == "ip_only" ]; then
-            # If the checker expects only the IP, print DESTINATION and exit function
-            echo "$DESTINATION"
-            return
-        fi
-
-        # Otherwise, print in verbose format (for the first check block)
+        # Print the required verbose format
         echo "The subdomain $SUB_DOMAIN is a $RECORD_TYPE record and points to $DESTINATION"
-    else
-        # Handle record not found
-        if [ "$FORMAT" == "ip_only" ]; then
-            # If in ip_only mode and nothing found, print nothing (0 chars long)
-            return
-        fi
         
-        # Fallback/Not Found (Verbose mode only)
+    else
+        # Fallback for record not found. We use dig +short to confirm a lack of IP.
         ip_address=$(dig "$FULL_DOMAIN" +short 2>/dev/null | head -n 1)
         if [ -n "$ip_address" ]; then
+            # If +short returns an IP, assume it's an A record even if verbose parsing failed (safety)
             echo "The subdomain $SUB_DOMAIN is a A record and points to $ip_address"
         else
+            # No record found at all
             echo "The subdomain $SUB_DOMAIN is not found for domain $DOMAIN (No DNS record found)"
         fi
     fi
@@ -78,17 +69,17 @@ main() {
         exit 1
     fi
     
-    # If only domain is provided, check all default subdomains (Verbose Mode)
+    # If only domain is provided, check all default subdomains
     if [ -z "$subdomain" ]; then
-        # Define the required subdomains, now correctly including the prefix variable
+        # Define the required subdomains
         SUBDOMAINS=("www" "${ID_PREFIX}lb-01" "${ID_PREFIX}web-01" "${ID_PREFIX}web-02")
         
         for SUB in "${SUBDOMAINS[@]}"; do
-            get_dns_info "$domain" "$SUB" "verbose"
+            get_dns_info "$domain" "$SUB"
         done
     else
-        # If specific subdomain is provided, check only that one (IP Only Mode)
-        get_dns_info "$domain" "$subdomain" "ip_only"
+        # If specific subdomain is provided, check only that one
+        get_dns_info "$domain" "$subdomain"
     fi
 }
 
